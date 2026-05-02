@@ -1,0 +1,16 @@
+# Go
+bin/
+*.exe
+*.test
+
+# eBPF generated
+*.o
+bpf_bpfel.go
+bpf_bpfeb.go
+
+# logs/data
+*.json
+*.csv
+
+# OS
+.DS_Store
