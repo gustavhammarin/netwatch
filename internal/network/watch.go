@@ -61,7 +61,7 @@ func Watch(netObjs bpf.NetObjects, ifaceName string) {
 	for {
 		select {
 		case <-ticker.C:
-			writeCountsToJSON(&netObjs, "flows.json")
+			writeToJSON(&netObjs, "flows.json")
 		case <-stop:
 			fmt.Println("stopping")
 			return
@@ -70,7 +70,7 @@ func Watch(netObjs bpf.NetObjects, ifaceName string) {
 	}
 }
 
-func writeCountsToJSON(netObjs *bpf.NetObjects, filename string) {
+func writeToJSON(netObjs *bpf.NetObjects, filename string) {
 	var records []FlowRecord
 
 	var key FlowKey
