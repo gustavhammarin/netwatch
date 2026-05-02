@@ -5,8 +5,7 @@ bin/
 
 # eBPF generated
 *.o
-bpf_bpfel.go
-bpf_bpfeb.go
+bpf/
 
 # logs/data
 *.json

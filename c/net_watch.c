@@ -1,13 +1,9 @@
 //go:build ignore
 
-#include <linux/bpf.h>
-#include <linux/if_ether.h>
-#include <linux/ip.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include <linux/in.h>
+#include <bpf/bpf_core_read.h>
 
 struct flow_key {
     __u32 src_ip;
@@ -16,11 +12,17 @@ struct flow_key {
     __u16 dst_port;
 };
 
+struct flow_value {
+    __u64 packets;
+    __u64 bytes;
+};
+#define ETH_P_IP    0x0800
+
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 4096);
     __type(key, struct flow_key);
-    __type(value, __u64);
+    __type(value, struct flow_value);
 } flow_counts SEC(".maps");
 
 SEC("xdp")
@@ -69,11 +71,18 @@ int count_packets(struct xdp_md *ctx) {
         key.dst_port = bpf_ntohs(udp->dest);
     }
 
-    __u64 *count = bpf_map_lookup_elem(&flow_counts, &key);
-    if (count) {
-        __sync_fetch_and_add(count, 1);
+    __u64 packet_size = data_end - data;
+
+    struct flow_value *value = bpf_map_lookup_elem(&flow_counts, &key);
+
+    if (value) {
+        __sync_fetch_and_add(&value->packets, 1);
+        __sync_fetch_and_add(&value->bytes, packet_size);
     } else {
-        __u64 initial = 1;
+        struct flow_value initial = {
+            .packets = 1,
+            .bytes = packet_size,
+        };
         bpf_map_update_elem(&flow_counts, &key, &initial, BPF_ANY);
     }
 

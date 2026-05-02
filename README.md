@@ -11,5 +11,6 @@ A simple eBPF/XDP-based network monitor written in Go.
 ## Run
 
 ```bash
+make deps
 go generate
-sudo go run . <interface>
+make run <interface>
