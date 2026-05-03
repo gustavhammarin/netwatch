@@ -8,6 +8,7 @@ import (
 	"netwatch/bpf"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
@@ -24,14 +25,14 @@ type FsRecord struct {
 	Comm     string `json:"comm"`
 	Filename string `json:"filename"`
 	Op       string `json:"op"`
-	Count    uint16   `json:"count"`
+	Count    uint16 `json:"count"`
 }
 
 type FsKey struct {
-    Pid      uint32
-    Comm     string
-    Filename string
-    Op       string
+	Pid      uint32
+	Comm     string
+	Filename string
+	Op       string
 }
 
 func Watch(fsObjs *bpf.FsObjects) {
@@ -54,7 +55,16 @@ func Watch(fsObjs *bpf.FsObjects) {
 	}
 	defer f.Close()
 
-	enc := json.NewEncoder(f)
+	counts := make(map[FsKey]*FsRecord)
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	go func() {
+		for range ticker.C {
+			writeToJSON(counts, f.Name())
+		}
+	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
@@ -62,6 +72,7 @@ func Watch(fsObjs *bpf.FsObjects) {
 	go func() {
 		<-stop
 		rd.Close()
+		ticker.Stop()
 	}()
 
 	for {
@@ -82,9 +93,37 @@ func Watch(fsObjs *bpf.FsObjects) {
 			Op:       opName(event.Op),
 		}
 
-		if err := enc.Encode(fsRecord); err != nil {
-			log.Printf("encode: %v", err)
+		key := FsKey{
+			Pid:      fsRecord.Pid,
+			Comm:     fsRecord.Comm,
+			Filename: fsRecord.Filename,
+			Op:       fsRecord.Op,
 		}
+
+		if rec, exists := counts[key]; exists {
+			rec.Count++
+		} else {
+			newRecord := fsRecord
+			newRecord.Count = 1
+			counts[key] = &newRecord
+		}
+	}
+}
+
+func writeToJSON(counts map[FsKey]*FsRecord, filename string) {
+	records := make([]*FsRecord, 0, len(counts))
+	for _, rec := range counts {
+		records = append(records, rec)
+	}
+
+	data, err := json.MarshalIndent(records, "", " ")
+	if err != nil {
+		log.Printf("marshal json: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		log.Printf("write json: %v", err)
 	}
 }
 
