@@ -11,7 +11,7 @@ endif
 
 deps:
 	sudo apt update
-	sudo apt install -y golang-go clang llvm gcc make git libbpf-dev linux-libc-dev linux-headers-$$(uname -r) linux-tools-common
+	sudo apt install -y golang-go clang llvm gcc make git libbpf-dev linux-libc-dev linux-headers-generic linux-tools-common
 	go mod tidy
 	go install github.com/cilium/ebpf/cmd/bpf2go@latest
 
