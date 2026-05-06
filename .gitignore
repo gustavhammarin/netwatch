@@ -6,6 +6,7 @@ bin/
 # eBPF generated
 *.o
 bpf/*
+!bpf/.gitkeep
 
 # logs/data
 *.json
