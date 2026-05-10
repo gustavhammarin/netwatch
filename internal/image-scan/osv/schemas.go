@@ -1,19 +1,12 @@
 package osv
 
-import "netwatch/internal/image-scan/parser"
+import (
+	"encoding/json"
+	"netwatch/internal/image-scan/parser"
+)
 
 type osvResponse struct {
-    Vulns []struct {
-        ID      string   `json:"id"`
-        Summary string   `json:"summary"`
-        Aliases []string `json:"aliases"`
-    } `json:"vulns"`
-}
-
-type Vulnerability struct {
-    ID       string   `json:"id"`
-    Summary  string   `json:"summary"`
-    Aliases  []string `json:"aliases"`
+	Vulns []json.RawMessage `json:"vulns"`
 }
 
 type OsvRequest struct {
@@ -25,6 +18,6 @@ type OsvRequest struct {
 }
 
 type Finding struct {
-	Package parser.Package `json:"package"`
-	Vulnerability Vulnerability `json:"vulnerability"`
+	Package       parser.Package  `json:"package"`
+	Vulnerability json.RawMessage `json:"vulnerability"`
 }

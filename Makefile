@@ -7,7 +7,7 @@ else
 	INCLUDE_DIR := /usr/include/x86_64-linux-gnu
 endif
 
-.PHONY: deps generate build run clean iface
+.PHONY: deps generate build build-api run run-api clean iface
 
 deps:
 	sudo apt update
@@ -15,11 +15,20 @@ deps:
 	go mod tidy
 	go install github.com/cilium/ebpf/cmd/bpf2go@latest
 
+generate:
+	go generate ./...
+
 build: generate
 	go build -o netwatch .
 
+build-api: generate
+	go build -o netwatch-api ./cmd/api
+
 run: build
 	sudo ./netwatch $(IFACE)
+
+run-api: build-api
+	sudo NETWATCH_TOKEN=$${NETWATCH_TOKEN:-dev-secret} ./netwatch-api --listen 0.0.0.0:8080 --interface $(IFACE)
 
 iface:
 	ip link

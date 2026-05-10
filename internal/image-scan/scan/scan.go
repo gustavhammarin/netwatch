@@ -1,56 +1,86 @@
-package main
+package scan
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"net/http"
 	"netwatch/internal/image-scan/image"
 	"netwatch/internal/image-scan/osv"
 	"netwatch/internal/image-scan/parser"
-	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: image-scan <image>")
-		os.Exit(2)
-	}
+// Result contains the static filesystem analysis for a container image.
+type Result struct {
+	Image    string           `json:"image"`
+	Packages []parser.Package `json:"packages"`
+	Findings []osv.Finding    `json:"findings"`
+}
 
-	imageName := os.Args[1]
+// EventFunc receives progress updates during image scanning.
+type EventFunc func(message string)
+
+// Image scans an image from the local Docker daemon and queries OSV for package findings.
+func Image(ctx context.Context, imageName string, progress EventFunc) (Result, error) {
+	if progress != nil {
+		progress("saving image from Docker daemon")
+	}
 	img, err := image.ExtractImageFromDaemon(imageName)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return Result{}, err
 	}
-	packages := collectPackages(img)
-	if err := writePackagesToJSON(packages); err != nil {
-		fmt.Print(err)
+
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("scan cancelled: %w", err)
 	}
+
+	if progress != nil {
+		progress("extracting packages from image filesystem")
+	}
+	packages := CollectPackages(img)
+
+	if progress != nil {
+		progress("querying OSV vulnerability database")
+	}
+	findings := queryFindings(ctx, packages)
+
+	return Result{
+		Image:    imageName,
+		Packages: packages,
+		Findings: findings,
+	}, nil
+}
+
+func queryFindings(ctx context.Context, packages []parser.Package) []osv.Finding {
 	type osvResult struct {
 		findings []osv.Finding
-		err      error
 	}
+
 	results := make(chan osvResult, len(packages))
 	limit := make(chan struct{}, 20)
+	client := &http.Client{Timeout: 15 * time.Second}
 
 	var wg sync.WaitGroup
-
 	for _, pkg := range packages {
 		pkg := pkg
-
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			limit <- struct{}{}
-			defer func() { <-limit }()
-
-			res, err := osv.QueryOSV(pkg)
-			results <- osvResult{
-				findings: res,
-				err:      err,
+			select {
+			case limit <- struct{}{}:
+				defer func() { <-limit }()
+			case <-ctx.Done():
+				return
 			}
+
+			res, err := osv.QueryOSVContext(ctx, client, pkg)
+			if err != nil {
+				return
+			}
+			results <- osvResult{findings: res}
 		}()
 	}
 	wg.Wait()
@@ -58,49 +88,13 @@ func main() {
 
 	var findings []osv.Finding
 	for result := range results {
-		if result.err != nil {
-			fmt.Print(result.err)
-			continue
-		}
 		findings = append(findings, result.findings...)
 	}
-
-	if err := writeFindingsToJSON(findings); err != nil {
-		fmt.Print(err)
-	}
-
+	return findings
 }
 
-func writePackagesToJSON(pkgs []parser.Package) error {
-	f, err := os.Create("packages.json")
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(pkgs); err != nil {
-		return fmt.Errorf("failed to write json: %w", err)
-	}
-	return nil
-}
-func writeFindingsToJSON(findings []osv.Finding) error {
-	f, err := os.Create("findings.json")
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(findings); err != nil {
-		return fmt.Errorf("failed to write json: %w", err)
-	}
-	return nil
-}
-
-func collectPackages(img image.Image) []parser.Package {
+// CollectPackages returns unique packages discovered in the image rootfs and layers.
+func CollectPackages(img image.Image) []parser.Package {
 	var packages []parser.Package
 	seen := make(map[string]struct{})
 

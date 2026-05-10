@@ -30,11 +30,22 @@ type Image struct {
 	RepoTags []string          `json:"repoTags"`
 	Layers   []Layer           `json:"layers"`
 	RootFS   map[string][]byte `json:"rootfs"`
+	Variants []Variant         `json:"variants"`
+}
+
+type Variant struct {
+	Config   Config            `json:"config"`
+	RepoTags []string          `json:"repoTags"`
+	Layers   []Layer           `json:"layers"`
+	RootFS   map[string][]byte `json:"rootfs"`
 }
 
 type Layer struct {
-	Files     map[string][]byte `json:"files"`
-	Whiteouts []string          `json:"whiteouts"`
+	Files         map[string][]byte `json:"files"`
+	Whiteouts     []string          `json:"whiteouts"`
+	Path          string            `json:"path,omitempty"`
+	ManifestIndex int               `json:"manifestIndex,omitempty"`
+	LayerIndex    int               `json:"layerIndex,omitempty"`
 }
 
 func ExtractFromDaemon(imageName string) ([]Layer, error) {
@@ -102,31 +113,48 @@ func extractFromTar(tarPath string) (Image, error) {
 		return Image{}, fmt.Errorf("image archive has no manifests")
 	}
 
-	var config Config
-	if configData, ok := files[manifests[0].Config]; ok {
-		if err := json.Unmarshal(configData, &config); err != nil {
-			return Image{}, fmt.Errorf("failed to parse image config %s: %w", manifests[0].Config, err)
+	var variants []Variant
+	var allLayers []Layer
+	for manifestIndex, manifest := range manifests {
+		var config Config
+		if configData, ok := files[manifest.Config]; ok {
+			if err := json.Unmarshal(configData, &config); err != nil {
+				return Image{}, fmt.Errorf("failed to parse image config %s: %w", manifest.Config, err)
+			}
 		}
-	}
 
-	var layers []Layer
-	for _, layerPath := range manifests[0].Layers {
-		layerData, ok := files[layerPath]
-		if !ok {
-			return Image{}, fmt.Errorf("image archive is missing layer %s", layerPath)
+		var layers []Layer
+		for layerIndex, layerPath := range manifest.Layers {
+			layerData, ok := files[layerPath]
+			if !ok {
+				return Image{}, fmt.Errorf("image archive is missing layer %s", layerPath)
+			}
+			layer, err := extractFromLayer(layerData)
+			if err != nil {
+				return Image{}, fmt.Errorf("failed to extract layer %s: %w", layerPath, err)
+			}
+			layer.Path = layerPath
+			layer.ManifestIndex = manifestIndex
+			layer.LayerIndex = layerIndex
+			layers = append(layers, layer)
 		}
-		layer, err := extractFromLayer(layerData)
-		if err != nil {
-			return Image{}, fmt.Errorf("failed to extract layer %s: %w", layerPath, err)
-		}
-		layers = append(layers, layer)
+
+		rootfs := MergeLayers(layers)
+		variants = append(variants, Variant{
+			Config:   config,
+			RepoTags: manifest.RepoTags,
+			Layers:   layers,
+			RootFS:   rootfs,
+		})
+		allLayers = append(allLayers, layers...)
 	}
 
 	return Image{
-		Config:   config,
-		RepoTags: manifests[0].RepoTags,
-		Layers:   layers,
-		RootFS:   MergeLayers(layers),
+		Config:   variants[0].Config,
+		RepoTags: variants[0].RepoTags,
+		Layers:   allLayers,
+		RootFS:   variants[0].RootFS,
+		Variants: variants,
 	}, nil
 }
 
@@ -219,6 +247,17 @@ func isInterestingFile(path string) bool {
 		"var/lib/rpm/rpmdb.sqlite",
 		"usr/lib/sysimage/rpm/rpmdb.sqlite",
 		"etc/os-release",
+	}
+	base := filepath.Base(path)
+	if base == "package-lock.json" || base == "npm-shrinkwrap.json" {
+		return true
+	}
+	if base == "package.json" && strings.Contains(path, "node_modules/") {
+		return true
+	}
+	if strings.HasPrefix(path, "var/lib/dpkg/status.d/") &&
+		!strings.HasSuffix(path, ".md5sums") {
+		return true
 	}
 	for _, suffix := range interesting {
 		if strings.HasSuffix(path, suffix) || path == suffix {
